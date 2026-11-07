@@ -2,8 +2,10 @@ name: Release macOS app
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - Info.plist
 
 permissions:
   contents: write
@@ -19,8 +21,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --clobber
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.zip dist/*.sha256 --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --notes-file RELEASE_NOTES.md --verify-tag
+            gh release create "$tag" dist/*.zip dist/*.sha256 --target "$GITHUB_SHA" --notes-file RELEASE_NOTES.md
           fi

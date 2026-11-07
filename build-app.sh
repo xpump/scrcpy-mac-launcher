@@ -3,7 +3,7 @@ set -euo pipefail
 
 project_dir=${0:A:h}
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$project_dir/Info.plist")
-if [[ -n "${GITHUB_REF_NAME:-}" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" != "v$version" ]]; then
     print -u2 "Git tag $GITHUB_REF_NAME 与应用版本 v$version 不一致"
     exit 1
 fi
@@ -64,5 +64,6 @@ cp -X "$resources_dir/scrcpy.icns" "$helper_dir/Contents/Resources/scrcpy.icns"
 
 zip_path="$dist_dir/ScrcpyLauncher-macos-arm64-v${version}.zip"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$zip_path"
-shasum -a 256 "$zip_path" > "$zip_path.sha256"
+checksum=$(shasum -a 256 "$zip_path" | awk '{print $1}')
+printf '%s  %s\n' "$checksum" "${zip_path:t}" > "$zip_path.sha256"
 print "已生成 $zip_path"

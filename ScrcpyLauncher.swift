@@ -18,6 +18,7 @@ private struct AndroidDevice {
 
 private struct LaunchOptions {
     let audioLocation: String
+    let keyboardMode: String
     let stayAwake: Bool
     let screenOff: Bool
     let alwaysOnTop: Bool
@@ -25,6 +26,7 @@ private struct LaunchOptions {
     static func load() -> LaunchOptions {
         let defaults = UserDefaults.standard
         return LaunchOptions(audioLocation: defaults.string(forKey: "audioLocation") ?? "computer",
+                             keyboardMode: defaults.string(forKey: "keyboardMode") ?? "mac",
                              stayAwake: defaults.bool(forKey: "stayAwake"),
                              screenOff: defaults.bool(forKey: "screenOff"),
                              alwaysOnTop: defaults.bool(forKey: "alwaysOnTop"))
@@ -32,6 +34,7 @@ private struct LaunchOptions {
 
     var arguments: [String] {
         var args = audioLocation == "phone" ? ["--no-audio"] : ["--audio-source=output"]
+        args.append(keyboardMode == "uhid" ? "--keyboard=uhid" : "--keyboard=sdk")
         if stayAwake { args.append("--stay-awake") }
         if screenOff { args.append("--turn-screen-off") }
         if alwaysOnTop { args.append("--always-on-top") }
@@ -171,6 +174,7 @@ private final class ScrcpyModel {
         environment["SCRCPY_ICON_DIR"] = Bundle.main.resourceURL!.appendingPathComponent("icons").path
         environment["DYLD_INSERT_LIBRARIES"] = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers/ScrcpyMirror.app/Contents/Frameworks/MirrorMenuBridge.dylib").path
+        environment["SCRCPY_MAC_IME_BRIDGE"] = options.keyboardMode == "mac" ? "1" : nil
         process.environment = environment
 
         let output = Pipe()
@@ -416,6 +420,8 @@ private final class SettingsController: NSViewController {
     private let audioControl = NSSegmentedControl(labels: ["电脑", "手机"],
                                                   trackingMode: .selectOne, target: nil, action: nil)
     private let audioDescription = label("", size: 11, color: .secondaryLabelColor)
+    private let keyboardControl = NSSegmentedControl(labels: ["Mac 输入法", "手机输入法", "兼容"],
+                                                     trackingMode: .selectOne, target: nil, action: nil)
     private let stayAwake = NSButton(checkboxWithTitle: "连接时保持唤醒", target: nil, action: nil)
     private let screenOff = NSButton(checkboxWithTitle: "镜像时关闭手机屏幕", target: nil, action: nil)
     private let alwaysOnTop = NSButton(checkboxWithTitle: "镜像窗口置顶", target: nil, action: nil)
@@ -443,6 +449,14 @@ private final class SettingsController: NSViewController {
         audioControl.selectedSegment = audioLocation == "phone" ? 1 : 0
         audioControl.target = self
         audioControl.action = #selector(settingChanged)
+        switch defaults.string(forKey: "keyboardMode") {
+        case "uhid": keyboardControl.selectedSegment = 1
+        case "sdk": keyboardControl.selectedSegment = 2
+        default: keyboardControl.selectedSegment = 0
+        }
+        keyboardControl.target = self
+        keyboardControl.action = #selector(settingChanged)
+        keyboardControl.toolTip = "Mac 输入法通过专用剪贴板传输中文；手机输入法使用实体键盘模式"
         stayAwake.state = defaults.bool(forKey: "stayAwake") ? .on : .off
         screenOff.state = defaults.bool(forKey: "screenOff") ? .on : .off
         alwaysOnTop.state = defaults.bool(forKey: "alwaysOnTop") ? .on : .off
@@ -464,6 +478,8 @@ private final class SettingsController: NSViewController {
             label("声音播放位置", size: 13, weight: .medium),
             audioControl,
             audioDescription,
+            label("键盘输入", size: 13, weight: .medium),
+            keyboardControl,
             separator,
             stayAwake,
             screenOff,
@@ -472,7 +488,7 @@ private final class SettingsController: NSViewController {
             showPasswordScreen,
             secureKeyboardDescription,
             secureKeyboardStatus,
-            label("更改声音或镜像选项后会重新连接当前镜像。", size: 11, color: .secondaryLabelColor)
+            label("调整设置后会重新连接当前镜像。", size: 11, color: .secondaryLabelColor)
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -485,6 +501,7 @@ private final class SettingsController: NSViewController {
             stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 18),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -18),
             audioControl.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            keyboardControl.widthAnchor.constraint(equalTo: stack.widthAnchor),
             audioDescription.widthAnchor.constraint(equalTo: stack.widthAnchor),
             separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             separator.heightAnchor.constraint(equalToConstant: 1),
@@ -494,13 +511,14 @@ private final class SettingsController: NSViewController {
             secureKeyboardStatus.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         view = root
-        preferredContentSize = NSSize(width: 330, height: 400)
+        preferredContentSize = NSSize(width: 330, height: 455)
         loadSecureKeyboard()
     }
 
     @objc private func settingChanged() {
         let defaults = UserDefaults.standard
         defaults.set(audioControl.selectedSegment == 1 ? "phone" : "computer", forKey: "audioLocation")
+        defaults.set(["mac", "uhid", "sdk"][keyboardControl.selectedSegment], forKey: "keyboardMode")
         defaults.set(stayAwake.state == .on, forKey: "stayAwake")
         defaults.set(screenOff.state == .on, forKey: "screenOff")
         defaults.set(alwaysOnTop.state == .on, forKey: "alwaysOnTop")
@@ -684,7 +702,7 @@ private final class HelpController: NSViewController {
     }
 }
 
-private final class LauncherApp: NSObject, NSApplicationDelegate {
+private final class LauncherApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let model = ScrcpyModel()
     private var window: NSWindow!
     private var devicePicker: NSPopUpButton!
@@ -725,6 +743,12 @@ private final class LauncherApp: NSObject, NSApplicationDelegate {
         !model.isMirroring
     }
 
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === window, model.isMirroring else { return true }
+        sender.orderOut(nil)
+        return false
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         showControls()
         return true
@@ -757,6 +781,8 @@ private final class LauncherApp: NSObject, NSApplicationDelegate {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 350),
                           styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
         window.title = "scrcpy"
         window.center()
         let content = window.contentView!
